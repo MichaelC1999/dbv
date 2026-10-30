@@ -16,6 +16,8 @@ import {
 } from "../api/mongo";
 import { useAuth } from "../context/useAuth";
 import CollectionView from "../components/CollectionView";
+import MySqlTableView from "../components/MySqlTableView";
+import { getMySqlDatabases, getMySqlTables } from "../api/mysql";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { ThemeSelector } from "../components/ThemeSelector";
 import { useThemeMode } from "../context/useThemeMode";
@@ -87,8 +89,11 @@ const primaryBtnStyle: React.CSSProperties = {
   fontFamily: FONT,
 };
 
+type DataSource = "mongodb" | "mysql";
+
 interface Tab {
   id: string;
+  source: DataSource;
   db: string;
   col: string;
 }
@@ -257,7 +262,8 @@ export default function BrowserPage() {
   }, []);
 
   // ── Tab state ──
-  const [tabs, setTabs] = useState<Tab[]>([{ id: "tab-0", db: "", col: "" }]);
+  const [source, setSource] = useState<DataSource>("mongodb");
+  const [tabs, setTabs] = useState<Tab[]>([{ id: "tab-0", source: "mongodb", db: "", col: "" }]);
   const [activeTabId, setActiveTabId] = useState("tab-0");
   const [tabContextMenu, setTabContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
 
@@ -269,6 +275,7 @@ export default function BrowserPage() {
   const [colSearch, setColSearch] = useState("");
   const [hoveredDb, setHoveredDb] = useState<string | null>(null);
   const [hoveredCol, setHoveredCol] = useState<string | null>(null);
+  const [sourceError, setSourceError] = useState("");
 
   // ── DB/collection management ──
   const [newDbName, setNewDbName] = useState("");
@@ -294,15 +301,15 @@ export default function BrowserPage() {
   // ── Tab management ──
   const openCollection = useCallback((db: string, col: string) => {
     const id = `tab-${Date.now()}`;
-    setTabs((prev) => [...prev, { id, db, col }]);
+    setTabs((prev) => [...prev, { id, source, db, col }]);
     setActiveTabId(id);
-  }, []);
+  }, [source]);
 
   const closeTab = useCallback((id: string) => {
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== id);
       if (next.length === 0) {
-        const fresh = { id: `tab-${Date.now()}`, db: "", col: "" };
+        const fresh = { id: `tab-${Date.now()}`, source, db: "", col: "" };
         setActiveTabId(fresh.id);
         return [fresh];
       }
@@ -312,46 +319,65 @@ export default function BrowserPage() {
       }
       return next;
     });
-  }, [activeTabId]);
+  }, [activeTabId, source]);
 
   const closeOtherTabs = useCallback((id: string) => {
     setTabs((prev) => {
       const kept = prev.filter((t) => t.id === id);
       if (kept.length === 0) {
-        const fresh = { id: `tab-${Date.now()}`, db: "", col: "" };
+        const fresh = { id: `tab-${Date.now()}`, source, db: "", col: "" };
         setActiveTabId(fresh.id);
         return [fresh];
       }
       setActiveTabId(id);
       return kept;
     });
-  }, []);
+  }, [source]);
 
   const closeAllTabs = useCallback(() => {
-    const fresh = { id: `tab-${Date.now()}`, db: "", col: "" };
+    const fresh = { id: `tab-${Date.now()}`, source, db: "", col: "" };
     setActiveTabId(fresh.id);
     setTabs([fresh]);
-  }, []);
+  }, [source]);
 
   const reloadDatabases = useCallback(() => {
-    getDatabases()
-      .then((d) => setDatabases(d.databases))
+    setSourceError("");
+    const request = source === "mysql" ? getMySqlDatabases() : getDatabases();
+    request
+      .then((result) => setDatabases(result.databases))
       .catch((err) => {
         const status = (err as { response?: { status?: number } }).response?.status;
         if (status === 401) {
           logout();
           navigate("/login");
+          return;
         }
-        // otherwise leave databases empty (connection error shown in banner)
+        setDatabases([]);
+        setSourceError(
+          (err as { response?: { data?: { error?: string } } }).response?.data?.error ??
+          (err as Error).message ??
+          `${source} connection unavailable`
+        );
       });
-  }, [logout, navigate]);
+  }, [logout, navigate, source]);
 
   const reloadCollections = useCallback(() => {
     if (!selectedDb) return;
-    getCollections(selectedDb)
-      .then((c) => setCollections(c.collections))
-      .catch(() => {});
-  }, [selectedDb]);
+    setSourceError("");
+    const request = source === "mysql"
+      ? getMySqlTables(selectedDb).then((result) => ({ collections: result.tables }))
+      : getCollections(selectedDb);
+    request
+      .then((result) => setCollections(result.collections))
+      .catch((err) => {
+        setCollections([]);
+        setSourceError(
+          (err as { response?: { data?: { error?: string } } }).response?.data?.error ??
+          (err as Error).message ??
+          "Unable to load database objects"
+        );
+      });
+  }, [selectedDb, source]);
 
   const handleCreateDb = async () => {
     if (!newDbName.trim() || !newDbCollection.trim()) return;
@@ -373,9 +399,9 @@ export default function BrowserPage() {
     const dbToRemove = selectedDb;
     try {
       await dropDatabase(dbToRemove);
-      const nextTabs = tabs.filter((t) => t.db !== dbToRemove);
+      const nextTabs = tabs.filter((tab) => !(tab.source === "mongodb" && tab.db === dbToRemove));
       const finalTabs = nextTabs.length === 0
-        ? [{ id: `tab-${Date.now()}`, db: "", col: "" }]
+        ? [{ id: `tab-${Date.now()}`, source: "mongodb" as const, db: "", col: "" }]
         : nextTabs;
       setTabs(finalTabs);
       if (!finalTabs.some((t) => t.id === activeTabId)) {
@@ -406,9 +432,9 @@ export default function BrowserPage() {
     const dbToUpdate = selectedDb;
     try {
       await dropCollection(dbToUpdate, col);
-      const nextTabs = tabs.filter((t) => !(t.col === col && t.db === dbToUpdate));
+      const nextTabs = tabs.filter((tab) => !(tab.source === "mongodb" && tab.col === col && tab.db === dbToUpdate));
       const finalTabs = nextTabs.length === 0
-        ? [{ id: `tab-${Date.now()}`, db: "", col: "" }]
+        ? [{ id: `tab-${Date.now()}`, source: "mongodb" as const, db: "", col: "" }]
         : nextTabs;
       setTabs(finalTabs);
       if (!finalTabs.some((t) => t.id === activeTabId)) {
@@ -422,18 +448,19 @@ export default function BrowserPage() {
 
   useEffect(() => {
     reloadDatabases();
-    getConnection().then(setConnInfo).catch(() => {});
   }, [reloadDatabases]);
+
+  useEffect(() => {
+    getConnection().then(setConnInfo).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!selectedDb) {
       setCollections([]);
       return;
     }
-    getCollections(selectedDb)
-      .then((c) => setCollections(c.collections))
-      .catch(() => {});
-  }, [selectedDb]);
+    reloadCollections();
+  }, [selectedDb, reloadCollections]);
 
   // Keyboard shortcuts for BrowserPage-level modals
   useEffect(() => {
@@ -533,14 +560,12 @@ export default function BrowserPage() {
 
   const getTabLabel = (tab: Tab): string => {
     if (!tab.col) return "New Tab";
-    const siblings = tabs.filter((t) => t.col === tab.col && t.db === tab.db);
-    const hasCrossDbDup = tabs.some((t) => t.col === tab.col && t.db !== tab.db);
-    const base = hasCrossDbDup ? `${tab.db}/${tab.col}` : tab.col;
-    const label =
-      siblings.length > 1
-        ? `${base} (${siblings.findIndex((t) => t.id === tab.id) + 1})`
-        : base;
-    return label.length > 22 ? label.slice(0, 22) + "…" : label;
+    const siblings = tabs.filter((candidate) => candidate.source === tab.source && candidate.col === tab.col && candidate.db === tab.db);
+    const hasDuplicate = tabs.some((candidate) => candidate.id !== tab.id && candidate.col === tab.col);
+    const sourcePrefix = tab.source === "mysql" ? "MySQL · " : "";
+    const base = hasDuplicate ? `${tab.db}/${tab.col}` : tab.col;
+    const label = `${sourcePrefix}${siblings.length > 1 ? `${base} (${siblings.findIndex((candidate) => candidate.id === tab.id) + 1})` : base}`;
+    return label.length > 26 ? label.slice(0, 26) + "…" : label;
   };
 
   return (
@@ -609,7 +634,41 @@ export default function BrowserPage() {
           </div>
         </div>
 
-        {/* Connection status indicator */}
+        <div
+          role="group"
+          aria-label="Database source"
+          style={{ padding: "8px 16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, borderBottom: `1px solid ${sidebarBorder}` }}
+        >
+          {([ ["mongodb", "MongoDB"], ["mysql", "MySQL"] ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={source === id}
+              onClick={() => {
+                setSource(id);
+                setSelectedDb("");
+                setCollections([]);
+                setDbSearch("");
+                setColSearch("");
+              }}
+              style={{
+                border: `1px solid ${source === id ? "#2563eb" : sidebarBorder}`,
+                borderRadius: 6,
+                padding: "6px 8px",
+                cursor: "pointer",
+                background: source === id ? "#2563eb" : "transparent",
+                color: source === id ? "#ffffff" : sidebarItemText,
+                fontSize: 12,
+                fontWeight: 600,
+                fontFamily: FONT,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* MongoDB connection status indicator */}
         <div
           style={{
             padding: "8px 16px",
@@ -699,6 +758,12 @@ export default function BrowserPage() {
           </div>
         </div>
 
+        {sourceError && (
+          <div role="alert" style={{ padding: "8px 16px", color: "#ef4444", fontSize: 11, borderBottom: `1px solid ${sidebarBorder}` }}>
+            {sourceError}
+          </div>
+        )}
+
         {/* Database + Collection sections – side by side */}
         <div style={{ flex: 1, display: "flex", flexDirection: "row", overflow: "hidden", borderTop: `1px solid ${sidebarBorder}` }}>
 
@@ -714,7 +779,7 @@ export default function BrowserPage() {
               }}
             >
               <span style={sectionLabelStyle}>{t("nav.section.databases")}</span>
-              {canWrite && (
+              {canWrite && source === "mongodb" && (
                 <button
                   onClick={(e) => { newDbOpenerRef.current = e.currentTarget as HTMLElement; setNewDbOpen(true); }}
                   style={{
@@ -799,7 +864,7 @@ export default function BrowserPage() {
                       >
                         {db}
                       </span>
-                      {isSelected && (
+                      {source === "mongodb" && isSelected && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -828,7 +893,7 @@ export default function BrowserPage() {
                           ℹ
                         </button>
                       )}
-                      {canWrite && isSelected && (
+                      {canWrite && source === "mongodb" && isSelected && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -869,8 +934,8 @@ export default function BrowserPage() {
                 flexShrink: 0,
               }}
             >
-              <span style={sectionLabelStyle}>{t("nav.section.collections")}</span>
-              {canWrite && selectedDb && (
+              <span style={sectionLabelStyle}>{source === "mysql" ? t("mysql.tables") : t("nav.section.collections")}</span>
+              {canWrite && source === "mongodb" && selectedDb && (
                 <button
                   onClick={(e) => { newColOpenerRef.current = e.currentTarget as HTMLElement; setNewColOpen(true); }}
                   style={{
@@ -893,7 +958,7 @@ export default function BrowserPage() {
               <input
                 value={colSearch}
                 onChange={(e) => setColSearch(e.target.value)}
-                placeholder={t("collection.search.placeholder")}
+                placeholder={source === "mysql" ? t("mysql.searchTables") : t("collection.search.placeholder")}
                 style={sidebarSearchStyle}
                 disabled={!selectedDb}
               />
@@ -923,11 +988,13 @@ export default function BrowserPage() {
                     fontFamily: FONT,
                   }}
                 >
-                  {t("collection.list.empty.noCollections")}{canWrite ? ` ${t("collection.list.empty.canCreate")}` : ""}
+                  {source === "mysql"
+                    ? t("mysql.noTables")
+                    : <>{t("collection.list.empty.noCollections")}{canWrite ? ` ${t("collection.list.empty.canCreate")}` : ""}</>}
                 </p>
               ) : (
                 filteredCollections.map((col) => {
-                  const isSelected = col === activeTab?.col && selectedDb === activeTab?.db;
+                  const isSelected = source === activeTab?.source && col === activeTab?.col && selectedDb === activeTab?.db;
                   const isHovered = hoveredCol === col;
                   return (
                     <div
@@ -968,7 +1035,7 @@ export default function BrowserPage() {
                       >
                         {col}
                       </span>
-                      {canWrite && (
+                      {canWrite && source === "mongodb" && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1088,7 +1155,13 @@ export default function BrowserPage() {
                 aria-selected={isActive}
                 aria-controls={`panel-${tab.id}`}
                 tabIndex={isActive ? 0 : -1}
-                onClick={() => setActiveTabId(tab.id)}
+                onClick={() => {
+                  setActiveTabId(tab.id);
+                  if (tab.col) {
+                    setSource(tab.source);
+                    setSelectedDb(tab.db);
+                  }
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setTabContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY });
@@ -1144,7 +1217,7 @@ export default function BrowserPage() {
           <button
             onClick={() => {
               const id = `tab-${Date.now()}`;
-              setTabs((prev) => [...prev, { id, db: "", col: "" }]);
+              setTabs((prev) => [...prev, { id, source, db: "", col: "" }]);
               setActiveTabId(id);
             }}
             style={{
@@ -1224,12 +1297,20 @@ export default function BrowserPage() {
               tabIndex={0}
               style={{ flex: 1, display: tab.id === activeTabId ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}
             >
-              <CollectionView
-                db={tab.db}
-                col={tab.col}
-                visible={tab.id === activeTabId}
-                tabId={tab.id}
-              />
+              {tab.source === "mysql" ? (
+                <MySqlTableView
+                  db={tab.db}
+                  table={tab.col}
+                  visible={tab.id === activeTabId}
+                />
+              ) : (
+                <CollectionView
+                  db={tab.db}
+                  col={tab.col}
+                  visible={tab.id === activeTabId}
+                  tabId={tab.id}
+                />
+              )}
             </div>
           ))}
         </div>

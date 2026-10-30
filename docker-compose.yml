@@ -29,6 +29,8 @@ services:
     environment:
       MONGODB_URI: mongodb://mongo:27017
       MONGODB_DB: ${MONGODB_DB:-dbv}
+      # Local development defaults only. Use a SELECT-only MySQL account in production.
+      MYSQL_URL: ${MYSQL_URL-mysql://dbv:dbv_local@mysql:3306/dbv}
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-master}
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-dbv}
@@ -61,6 +63,26 @@ services:
       retries: 5
     restart: unless-stopped
 
+  mysql:
+    image: mysql:8
+    expose:
+      - "3306"
+    environment:
+      # Local development defaults; replace all credentials outside local Compose.
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-dbv}
+      MYSQL_USER: ${MYSQL_USER:-dbv}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-dbv_local}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_local}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root_local}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
     command: start-dev --health-enabled=true --proxy-headers=xforwarded --hostname-strict=false
@@ -90,4 +112,5 @@ services:
 
 volumes:
   mongo_data:
+  mysql_data:
   traefik_certs:

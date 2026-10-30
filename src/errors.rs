@@ -20,6 +20,12 @@ pub enum AppError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("MySQL error: {0}")]
+    Sql(#[from] sqlx::Error),
+
+    #[error("Service unavailable: {0}")]
+    Unavailable(String),
+
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
@@ -44,6 +50,8 @@ impl IntoResponse for AppError {
                 (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
             }
             AppError::Json(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            AppError::Sql(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            AppError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             AppError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
@@ -97,6 +105,13 @@ mod tests {
         let (status, body) = response_parts(AppError::BadRequest("invalid JSON".into())).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(body["error"].as_str().unwrap().contains("invalid JSON"));
+    }
+
+    #[tokio::test]
+    async fn unavailable_returns_503() {
+        let (status, body) = response_parts(AppError::Unavailable("MySQL disabled".into())).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(body["error"].as_str().unwrap().contains("MySQL disabled"));
     }
 
     #[tokio::test]

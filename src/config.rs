@@ -19,6 +19,9 @@ pub struct Config {
     /// Default database shown on startup.
     pub mongodb_db: String,
 
+    /// Optional MySQL 8 connection URL. MySQL routes return 503 when unset.
+    pub mysql_url: Option<String>,
+
     /// Path to a PEM-encoded CA certificate file.
     /// Required when MongoDB uses a self-signed or private-CA TLS certificate.
     pub mongodb_tls_ca_file: Option<String>,
@@ -75,6 +78,7 @@ mod tests {
             server_port: 8080,
             mongodb_uri: "mongodb://localhost:27017".to_string(),
             mongodb_db: "testdb".to_string(),
+            mysql_url: None,
             mongodb_tls_ca_file: None,
             mongodb_tls_cert_key_file: None,
             mongodb_tls_allow_invalid_certs: false,

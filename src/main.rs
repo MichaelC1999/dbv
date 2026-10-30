@@ -16,6 +16,7 @@ mod auth;
 mod config;
 mod db;
 mod errors;
+mod mysql;
 mod routes;
 mod state;
 
@@ -43,6 +44,14 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     });
 
+    let mysql = mysql::create_pool(config.mysql_url.as_deref()).unwrap_or_else(|e| {
+        eprintln!("MySQL configuration error: {e}");
+        std::process::exit(1);
+    });
+    if mysql.is_some() {
+        tracing::info!("MySQL support enabled; connections will be established on demand");
+    }
+
     let jwks = auth::JwksCache::new(&config);
     if let Err(e) = jwks.get_keys().await {
         tracing::warn!("Could not pre-fetch JWKS (will retry on first request): {e}");
@@ -51,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         config: config.clone(),
         db: Arc::new(RwLock::new(db)),
+        mysql,
         jwks,
     };
 
@@ -64,6 +74,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/login", post(routes::auth_proxy::login))
         .route("/auth/refresh", post(routes::auth_proxy::refresh))
         .route("/databases", get(routes::data::list_databases))
+        .route("/mysql/databases", get(routes::mysql::list_databases))
+        .route(
+            "/mysql/databases/{db}/tables",
+            get(routes::mysql::list_tables),
+        )
+        .route(
+            "/mysql/databases/{db}/tables/{table}/schema",
+            get(routes::mysql::table_schema),
+        )
+        .route(
+            "/mysql/databases/{db}/tables/{table}/rows",
+            get(routes::mysql::table_rows),
+        )
         .route(
             "/databases/{db}",
             post(routes::data::create_database).delete(routes::data::drop_database),

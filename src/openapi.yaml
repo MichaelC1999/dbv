@@ -43,6 +43,8 @@ tags:
     description: Index listing and management
   - name: Transfer
     description: Export and import
+  - name: MySQL
+    description: Read-only MySQL 8 browsing (available when MYSQL_URL is configured)
 
 components:
   securitySchemes:
@@ -143,6 +145,47 @@ components:
         tls_allow_invalid_certs:
           type: boolean
 
+    MySqlColumn:
+      type: object
+      required: [name, data_type, column_type, nullable, extra]
+      properties:
+        name:
+          type: string
+        data_type:
+          type: string
+        column_type:
+          type: string
+        nullable:
+          type: boolean
+        key:
+          type: string
+          nullable: true
+        default:
+          nullable: true
+          description: Column default as reported by MySQL
+        extra:
+          type: string
+
+    MySqlRows:
+      type: object
+      required: [rows, total, page, limit]
+      properties:
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        total:
+          type: integer
+          format: int64
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+
     SchemaField:
       type: object
       properties:
@@ -180,6 +223,109 @@ components:
           description: Partial filter expression (partial indexes only)
 
 paths:
+  /mysql/databases:
+    get:
+      summary: List MySQL databases
+      description: Lists non-system schemas. Returns 503 when MYSQL_URL is not configured.
+      operationId: listMySqlDatabases
+      tags: [MySQL]
+      responses:
+        "200":
+          description: Database names
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [databases]
+                properties:
+                  databases:
+                    type: array
+                    items: { type: string }
+        "401": { description: Missing or invalid token }
+        "403": { description: Missing viewer role }
+        "503": { description: MySQL is not configured }
+
+  /mysql/databases/{db}/tables:
+    get:
+      summary: List MySQL tables
+      operationId: listMySqlTables
+      tags: [MySQL]
+      parameters:
+        - $ref: "#/components/parameters/db"
+      responses:
+        "200":
+          description: Table and view names
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tables]
+                properties:
+                  tables:
+                    type: array
+                    items: { type: string }
+        "404": { description: Database not found }
+        "503": { description: MySQL is not configured }
+
+  /mysql/databases/{db}/tables/{table}/schema:
+    get:
+      summary: Get MySQL table schema
+      operationId: getMySqlTableSchema
+      tags: [MySQL]
+      parameters:
+        - $ref: "#/components/parameters/db"
+        - name: table
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Ordered column metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [columns]
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MySqlColumn"
+        "404": { description: Database or table not found }
+        "503": { description: MySQL is not configured }
+
+  /mysql/databases/{db}/tables/{table}/rows:
+    get:
+      summary: Read MySQL table rows
+      description: Read-only, 1-based pagination. Filter is a case-insensitive literal substring search across textual columns.
+      operationId: getMySqlTableRows
+      tags: [MySQL]
+      parameters:
+        - $ref: "#/components/parameters/db"
+        - name: table
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: filter
+          in: query
+          description: Plain-text literal search; SQL wildcard characters are escaped.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Page of rows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MySqlRows"
+        "404": { description: Database or table not found }
+        "503": { description: MySQL is not configured }
+
   /health:
     get:
       summary: Health check

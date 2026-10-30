@@ -77,6 +77,10 @@ config:
   # Default database to show on startup
   mongodbDb: "test"
 
+  # Optional MySQL 8 URL. Enables authenticated, read-only MySQL browsing.
+  # Prefer mysqlExistingSecret in production rather than storing credentials here.
+  mysqlUrl: ""
+
   # Keycloak base URL reachable from inside the cluster
   # Example: http://keycloak.keycloak.svc.cluster.local:8080
   keycloakUrl: ""
@@ -95,3 +99,8 @@ config:
 # Use an existing Secret instead of creating one from config.mongodbUri.
 # The secret must contain a key named MONGODB_URI.
 existingSecret: ""
+
+# Optional existing Secret containing MYSQL_URL. When empty and config.mysqlUrl is
+# set, the chart creates a separate Secret. MySQL remains disabled when both are empty.
+mysqlExistingSecret: ""
+mysqlExistingSecretKey: "MYSQL_URL"

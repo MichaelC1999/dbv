@@ -16,6 +16,7 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        checksum/mysql-secret: {{ include (print $.Template.BasePath "/mysql-secret.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -48,6 +49,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "dbv.secretName" . }}
                   key: MONGODB_URI
+            {{- if or .Values.mysqlExistingSecret .Values.config.mysqlUrl }}
+            - name: MYSQL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mysqlExistingSecret | default (printf "%s-mysql" (include "dbv.fullname" .)) }}
+                  key: {{ .Values.mysqlExistingSecretKey | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /api/health

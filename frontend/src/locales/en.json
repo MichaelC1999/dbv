@@ -26,6 +26,28 @@
       "collections": "COLLECTIONS"
     }
   },
+  "mysql": {
+    "tables": "TABLES",
+    "searchTables": "Search tables…",
+    "noTables": "No tables found",
+    "readOnly": "MySQL · Read-only",
+    "searchRows": "Search text columns…",
+    "noRows": "No rows found",
+    "applyFilter": "Apply",
+    "clearFilter": "Clear",
+    "rowCount": "{{total}} rows · Page {{page}} of {{pages}}",
+    "views": "MySQL table views",
+    "filterRows": "Filter MySQL rows",
+    "tableLabel": "MySQL table {{database}}.{{table}}",
+    "schema": {
+      "column": "Column",
+      "type": "Type",
+      "nullable": "Nullable",
+      "key": "Key",
+      "default": "Default",
+      "extra": "Extra"
+    }
+  },
   "connection": {
     "status": {
       "noInfo": "No connection info"

@@ -18,6 +18,8 @@ bson = { version = "2", features = ["chrono-0_4"] }
 
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 reqwest = { version = "0.13", features = ["json", "rustls", "form"], default-features = false }
+sqlx = { version = "0.8", features = ["mysql", "runtime-tokio-rustls", "chrono", "json", "rust_decimal"], default-features = false }
+rust_decimal = "1"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

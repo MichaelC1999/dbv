@@ -1,9 +1,9 @@
-# dbv — MongoDB Browser
+# dbv — MongoDB Browser with read-only MySQL
 
 [![CI](https://github.com/dannys-janssen/dbv/actions/workflows/ci.yml/badge.svg)](https://github.com/dannys-janssen/dbv/actions/workflows/ci.yml)
 [![Docker](https://github.com/dannys-janssen/dbv/actions/workflows/docker.yml/badge.svg)](https://github.com/dannys-janssen/dbv/actions/workflows/docker.yml)
 
-A browser-based MongoDB viewer and editor secured with Keycloak OAuth2/JWT authentication. Runs entirely in Docker.
+A browser-based MongoDB viewer/editor with optional read-only MySQL 8 browsing, secured with Keycloak OAuth2/JWT authentication. Runs entirely in Docker.
 
 ## Table of Contents
 
@@ -56,13 +56,14 @@ echo '127.0.0.1  dbv.localhost keycloak.localhost' | sudo tee -a /etc/hosts
 docker compose up -d
 ```
 
-This starts four containers:
+This starts five containers:
 
 | Service | Purpose |
 |---|---|
 | **traefik** | HTTPS reverse proxy, routes traffic |
 | **dbv** | The application (Rust + React) |
-| **mongo** | MongoDB database |
+| **mongo** | Required MongoDB database |
+| **mysql** | Optional data source for read-only browsing (local Compose instance) |
 | **keycloak** | Authentication server |
 
 **4. Open the app**
@@ -401,8 +402,9 @@ dbv container
   ├── Axum (Rust)  serves /api/* and static files
   │     ├── auth/        JWT RS256 validation via Keycloak JWKS
   │     ├── rbac/        ReadAccess / WriteAccess Axum extractors
-  │     ├── routes/      auth proxy, CRUD, aggregate, schema, export/import
-  │     └── db/          MongoDB 3.7 async client
+  │     ├── routes/      auth proxy, MongoDB CRUD, read-only MySQL, export/import
+  │     ├── db/          required MongoDB async client
+  │     └── mysql        optional lazy sqlx MySQL connection pool
   └── React SPA    served from frontend/dist/
 ```
 
@@ -419,14 +421,15 @@ dbv container
 **1. Start infrastructure only**
 
 ```bash
-docker compose up -d traefik mongo keycloak
+docker compose up -d traefik mongo mysql keycloak
 ```
 
 **2. Run the Rust backend**
 
 ```bash
 cp .env.example .env
-# Edit .env — set MONGODB_URI=mongodb://localhost:27017 and expose mongo port if needed
+# Edit .env — set MONGODB_URI=mongodb://localhost:27017 and expose mongo port if needed.
+# Clear MYSQL_URL to disable MySQL, or point it at a MySQL 8 host reachable from your machine.
 export $(grep -v '^#' .env | xargs)
 cargo run
 # Server on http://localhost:8080
@@ -464,9 +467,11 @@ src/
 │   └── rbac.rs       # ReadAccess / WriteAccess extractors
 ├── db/
 │   └── mod.rs        # DbClient — wraps mongodb::Client, pings on startup, run_command helper
+├── mysql.rs          # Optional lazy sqlx MySQL pool
 └── routes/
     ├── auth_proxy.rs # POST /api/auth/login and /api/auth/refresh (Keycloak proxy)
-    ├── health.rs     # GET /api/health  (no auth, pings MongoDB)
+    ├── health.rs     # GET /api/health  (no auth, pings required MongoDB)
+    ├── mysql.rs      # Read-only MySQL databases, tables, schema, and rows
     ├── data.rs       # CRUD, aggregate, pagination, create/drop DB & collection, run_command
     ├── schema.rs     # Schema inference (samples 100 docs, infers BSON types)
     ├── transfer.rs   # JSON Export/Import (GET/POST) and BSON Export/Import (GET/POST)
@@ -519,6 +524,7 @@ All backend configuration is read from environment variables at startup. Missing
 |---|:---:|---|---|
 | `MONGODB_URI` | ✅ | — | MongoDB connection string (see examples below) |
 | `MONGODB_DB` | ✅ | — | Default database shown on startup |
+| `MYSQL_URL` | | *(unset)* | Optional MySQL 8 URL, e.g. `mysql://reader:password@mysql:3306/db`; use an account with SELECT-only grants |
 | `KEYCLOAK_URL` | ✅ | — | Keycloak base URL (internal, e.g. `http://keycloak:8080`) |
 | `KEYCLOAK_REALM` | ✅ | — | Keycloak realm |
 | `KEYCLOAK_CLIENT_ID` | ✅ | — | OAuth2 client ID |
@@ -591,6 +597,19 @@ All endpoints are under `/api`.
 | GET | `/api/databases/:db/collections/:col/documents/:id` | viewer+ | Get document by `_id` (ObjectId or string) |
 | PUT | `/api/databases/:db/collections/:col/documents/:id` | admin | Replace document by `_id` (ObjectId or string) |
 | DELETE | `/api/databases/:db/collections/:col/documents/:id` | admin | Delete document by `_id` (ObjectId or string) |
+
+#### MySQL 8 (optional, read-only)
+
+All routes require `dbv-viewer` or `dbv-admin`. If `MYSQL_URL` is unset, they return `503 Service Unavailable`; MongoDB startup and health behavior are unchanged. Connections are opened lazily. Database/table names are verified against `information_schema`, identifiers are quoted, and filter values are always bound parameters.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/mysql/databases` | List schemas excluding MySQL system schemas; returns `{ "databases": [...] }` |
+| GET | `/api/mysql/databases/:db/tables` | List tables and views; returns `{ "tables": [...] }` |
+| GET | `/api/mysql/databases/:db/tables/:table/schema` | Return ordered column metadata (`name`, `data_type`, `column_type`, `nullable`, `key`, `default`, `extra`) |
+| GET | `/api/mysql/databases/:db/tables/:table/rows` | Return `{ rows, total, page, limit }`; `page` is 1-based, `limit` defaults to 50 and is capped at 200 |
+
+The optional `filter` query parameter is plain text and performs a case-insensitive literal substring search across character/text/enum/set columns. SQL `%`, `_`, and `\\` characters are escaped, not treated as wildcards. Binary values are base64 strings; decimal and temporal values are strings to preserve precision and formatting.
 
 #### Aggregation & Schema
 
@@ -726,7 +745,7 @@ A Helm chart is provided at `kubernetes/helm/dbv/`. It deploys only the **dbv** 
 | `Deployment` | Liveness + readiness probes on `/api/health` |
 | `Service` | ClusterIP, port 80 → container 8080 |
 | `Ingress` | Any ingress class; optional TLS via cert-manager |
-| `Secret` | `MONGODB_URI` — create from values or point to existing secret |
+| `Secret` | Required `MONGODB_URI`, plus optional separate `MYSQL_URL`; each can use an existing Secret |
 | `ConfigMap` | All other env vars (Keycloak, DB name, TLS paths) |
 | `ServiceAccount` | Dedicated service account (opt-out with `serviceAccount.create: false`) |
 | `HorizontalPodAutoscaler` | CPU-based, disabled by default |
@@ -771,11 +790,14 @@ helm install dbv ./kubernetes/helm/dbv -f values-prod.yaml \
   --set config.keycloakClientId="dbv"
 ```
 
-**Use an existing Secret for `MONGODB_URI`:**
+**Use existing Secrets for connection URLs:**
 
 ```bash
 kubectl create secret generic my-mongo-secret --from-literal=MONGODB_URI="mongodb://..."
-helm install dbv ./kubernetes/helm/dbv --set existingSecret=my-mongo-secret ...
+kubectl create secret generic my-mysql-secret --from-literal=MYSQL_URL="mysql://reader:password@mysql:3306/db"
+helm install dbv ./kubernetes/helm/dbv \
+  --set existingSecret=my-mongo-secret \
+  --set mysqlExistingSecret=my-mysql-secret ...
 ```
 
 Key values — see `kubernetes/helm/dbv/values.yaml` for the full reference:
@@ -786,10 +808,13 @@ Key values — see `kubernetes/helm/dbv/values.yaml` for the full reference:
 | `image.tag` | chart `appVersion` | Image tag |
 | `config.mongodbUri` | *(required)* | MongoDB connection string |
 | `config.mongodbDb` | `test` | Default database |
+| `config.mysqlUrl` | `""` | Optional MySQL URL; creates a dedicated Secret when set |
 | `config.keycloakUrl` | *(required)* | Keycloak URL reachable from the pod |
 | `config.keycloakRealm` | *(required)* | Keycloak realm |
 | `config.keycloakClientId` | *(required)* | OAuth2 client ID |
 | `existingSecret` | `""` | Name of existing Secret containing `MONGODB_URI` |
+| `mysqlExistingSecret` | `""` | Existing Secret containing optional `MYSQL_URL` |
+| `mysqlExistingSecretKey` | `MYSQL_URL` | Key in the optional MySQL Secret |
 | `ingress.enabled` | `true` | Create an Ingress resource |
 | `autoscaling.enabled` | `false` | Enable HPA |
 
